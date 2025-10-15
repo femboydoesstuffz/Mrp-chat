@@ -1,0 +1,172 @@
+// ==UserScript==
+// @name         GeoFS Military RP Chat (Multiplayer RP)
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Multiplayer RP chat using GeoFS API, with T toggle, username change, and FPS-friendly memory
+// @match        https://www.geo-fs.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    function whenReady(fn) {
+        if (window.geofs && geofs.controls && geofs.api && geofs.api.chat) fn();
+        else setTimeout(() => whenReady(fn), 500);
+    }
+
+    whenReady(() => {
+        // Username setup
+        let username = localStorage.getItem("milrpChatUser") || geofs.api.userRecord.name || "Anonymous";
+
+        function saveUsername(newName) {
+            username = newName || "Anonymous";
+            localStorage.setItem("milrpChatUser", username);
+            document.getElementById("milrp-name").textContent = username;
+        }
+
+        // Style
+        const style = document.createElement("style");
+        style.textContent = `
+        #milrp-chat-btn {
+            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+            background: #253356; color: white; padding: 12px 18px; border-radius: 8px;
+            cursor: pointer; border: none; font-weight: bold;
+            box-shadow: 0 0 8px #0006;
+        }
+        #milrp-chat-win {
+            display: none; position: fixed; bottom: 70px; right: 20px; z-index: 10000;
+            width: 320px; background: #253356; color: white; border-radius: 10px;
+            padding: 10px; box-shadow: 0 0 14px #0008;
+        }
+        #milrp-messages {
+            height: 180px; overflow-y: auto; margin-bottom: 8px;
+            background: #152040; padding: 5px; border-radius: 7px;
+            font-size: 13px; line-height: 1.3em;
+        }
+        #milrp-input { width: 70%; }
+        #milrp-send, #milrp-changeuser {
+            width: 13%; margin-left: 2%; background: #4067b6; color: white;
+            border: none; border-radius: 5px; font-size: 12px;
+        }
+        #milrp-changeuser { background: #384970; }
+        #milrp-username { padding: 2px 0; color: #d0ddff; text-align: left; font-size: 12px; }
+        #milrp-overlay {
+            position: fixed; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
+            background: rgba(20,20,40,0.85); color: white; padding: 6px 10px;
+            border-radius: 6px; z-index: 20000; font-size: 13px; display: none;
+        }`;
+        document.head.appendChild(style);
+
+        // HTML
+        document.body.insertAdjacentHTML("beforeend", `
+            <button id="milrp-chat-btn">💬 RP Chat</button>
+            <div id="milrp-chat-win">
+                <div><b>Military RP Chat</b> <span style="float:right;cursor:pointer;" id="milrp-close">&#10006;</span></div>
+                <div id="milrp-username"><b>User:</b> <span id="milrp-name">${username}</span>
+                    <button id="milrp-changeuser">Change</button>
+                </div>
+                <div id="milrp-messages"></div>
+                <input id="milrp-input" placeholder="Type message..." maxlength="100"/>
+                <button id="milrp-send">Send</button>
+            </div>
+            <div id="milrp-overlay">Controls Disabled (Chat Active)</div>
+        `);
+
+        const chatBtn = document.getElementById("milrp-chat-btn");
+        const chatWin = document.getElementById("milrp-chat-win");
+        const closeBtn = document.getElementById("milrp-close");
+        const input = document.getElementById("milrp-input");
+        const sendBtn = document.getElementById("milrp-send");
+        const messagesEl = document.getElementById("milrp-messages");
+        const overlay = document.getElementById("milrp-overlay");
+        const changeUserBtn = document.getElementById("milrp-changeuser");
+
+        const messages = [];
+
+        function renderMessages() {
+            messagesEl.innerHTML = messages.map(m => `<div>${m}</div>`).join("");
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function sendMessage() {
+            const txt = input.value.trim();
+            if (!txt) return;
+
+            // Send via GeoFS chat API
+            geofs.api.chat.send(`[RP] [${username}] ${txt}`);
+
+            // Display locally
+            messages.push(`[${username}] ${txt}`);
+            if (messages.length > 20) messages.shift();
+            input.value = "";
+            renderMessages();
+        }
+
+        sendBtn.onclick = sendMessage;
+
+        changeUserBtn.onclick = () => {
+            const newName = prompt("Enter new username:", username);
+            if (newName) saveUsername(newName);
+        };
+
+        function disableGeoFSInput(state) {
+            if (geofs.controls && typeof geofs.controls.setDisabled === "function") {
+                geofs.controls.setDisabled(state);
+            }
+            overlay.style.display = state ? "block" : "none";
+        }
+
+        function openChat() {
+            chatWin.style.display = "block";
+            input.focus();
+            disableGeoFSInput(true);
+        }
+
+        function closeChat() {
+            chatWin.style.display = "none";
+            disableGeoFSInput(false);
+        }
+
+        chatBtn.onclick = openChat;
+        closeBtn.onclick = closeChat;
+
+        input.addEventListener("focus", () => disableGeoFSInput(true));
+        input.addEventListener("blur", () => disableGeoFSInput(false));
+
+        // Listen to all GeoFS chat messages and show RP ones
+        geofs.api.chat.onMessage((msg) => {
+            if (msg.text.startsWith("[RP]")) {
+                messages.push(msg.text);
+                if (messages.length > 20) messages.shift();
+                renderMessages();
+            }
+        });
+
+        // Keyboard handling (T to open, Esc to close, Enter sends)
+        window.addEventListener("keydown", function(e) {
+            if (document.activeElement === input) {
+                e.stopImmediatePropagation();
+                if (e.key === "Enter") {
+                    sendMessage();
+                    e.preventDefault();
+                }
+                return;
+            }
+
+            if (e.key.toLowerCase() === "t" && chatWin.style.display === "none") {
+                openChat();
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            if (e.key === "Escape" && chatWin.style.display === "block") {
+                closeChat();
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+
+        renderMessages();
+    });
+})();
