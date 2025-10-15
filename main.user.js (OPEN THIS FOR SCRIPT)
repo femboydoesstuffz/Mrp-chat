@@ -1,75 +1,57 @@
 // ==UserScript==
-// @name         GeoFS Military RP Chat (Socket.IO + Shareable)
+// @name         GeoFS Military RP Chat (P2P via Render)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Military RP chat using Socket.IO server. Open with T, change username, isolated messages.
-// @match        https://www.geo-fs.com/geofs.php*
+// @version      3.3
+// @description  Multiplayer RP chat using Render WebSocket server. Disables GeoFS keybinds only while typing in chat.
+// @match        https://www.geo-fs.com/*
 // @grant        none
-// @require      https://cdn.socket.io/4.8.0/socket.io.min.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // ---- Config ----
-    const SERVER_URL = "https://mrp-chat.onrender.com"; // <- your Render server URL
-    const MAX_MESSAGES = 20;
+    // WebSocket server URL (WSS)
+    const SERVER_URL = "wss://mrp-chat-1.onrender.com";
 
-    // Connect to Socket.IO server
-    const socket = io(SERVER_URL);
-
-    // ---- Username ----
-    let username = localStorage.getItem("milrpChatUser") || prompt("Enter your Military RP username:") || "Anonymous";
+    // Username setup
+    let username = localStorage.getItem("milrpChatUser") || prompt("Enter your RP username:") || "Anonymous";
     localStorage.setItem("milrpChatUser", username);
 
-    // ---- UI ----
+    // Add CSS for button and chat window
     const style = document.createElement("style");
     style.textContent = `
-    #milrp-chat-btn {
-        position: fixed; bottom: 20px; right: 20px; z-index: 9999;
-        background: #253356; color: white; padding: 12px 18px; border-radius: 8px; cursor: pointer; border: none;
-    }
-    #milrp-chat-win {
-        display: none; position: fixed; bottom: 70px; right: 20px; z-index: 10000;
-        width: 320px; background: #253356; color: white; border-radius: 10px;
-        padding: 10px; box-shadow: 0 0 14px #0008;
-    }
-    #milrp-messages {
-        height: 180px; overflow-y: auto; margin-bottom: 8px;
-        background: #152040; padding: 5px; border-radius: 7px;
-        font-size: 13px; line-height: 1.3em;
-    }
-    #milrp-input { width: 82%; }
-    #milrp-send { width: 15%; margin-left: 2%; background: #4067b6; color: white; border: none; border-radius: 5px; }
-    #milrp-username { padding: 2px 0; color: #d0ddff; text-align: left; font-size: 12px; }
-    #milrp-change-user {
-        background: #2e4372; color: white; border: none; border-radius: 5px;
-        padding: 2px 6px; font-size: 11px; margin-left: 5px; cursor: pointer;
-    }
-    #milrp-overlay {
-        position: fixed; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
-        background: rgba(20,20,40,0.85); color: white; padding: 6px 10px;
-        border-radius: 6px; z-index: 20000; font-size: 13px; display: none;
-    }
+        #milrp-chat-btn {
+            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+            background: #253356; color: white; padding: 12px 18px; border-radius: 8px;
+            cursor: pointer; border: none; font-weight: bold; box-shadow: 0 0 8px #0006;
+        }
+        #milrp-chat-win {
+            display: none; position: fixed; bottom: 70px; right: 20px; z-index: 10000;
+            width: 320px; background: #253356; color: white; border-radius: 10px;
+            padding: 10px; box-shadow: 0 0 14px #0008;
+        }
+        #milrp-messages {
+            height: 180px; overflow-y: auto; margin-bottom: 8px;
+            background: #152040; padding: 5px; border-radius: 7px;
+            font-size: 13px; line-height: 1.3em;
+        }
+        #milrp-input { width: 70%; }
+        #milrp-send { width: 28%; background: #4067b6; color: white; border: none; border-radius: 5px; }
+        #milrp-username { padding: 2px 0; color: #d0ddff; text-align: left; font-size: 12px; }
+        #milrp-status { font-size: 11px; color: #d0ffb0; margin-left: 5px; }
     `;
     document.head.appendChild(style);
 
+    // Add HTML for chat button & window
     document.body.insertAdjacentHTML("beforeend", `
         <button id="milrp-chat-btn">Military RP Chat</button>
         <div id="milrp-chat-win">
-            <div>
-                <b>Military RP Chat</b>
-                <span style="float:right;cursor:pointer;" id="milrp-close">&#10006;</span>
-            </div>
-            <div id="milrp-username">
-                <b>User:</b> <span id="milrp-name">${username}</span>
-                <button id="milrp-change-user">Change</button>
-            </div>
+            <div><b>Military RP Chat</b> <span style="float:right;cursor:pointer;" id="milrp-close">✖</span></div>
+            <div id="milrp-username"><b>User:</b> ${username} <span id="milrp-status">Connecting...</span></div>
             <div id="milrp-messages"></div>
             <input id="milrp-input" placeholder="Type message..." maxlength="100"/>
             <button id="milrp-send">Send</button>
         </div>
-        <div id="milrp-overlay">Controls Disabled (Chat Active)</div>
     `);
 
     const chatBtn = document.getElementById("milrp-chat-btn");
@@ -78,21 +60,8 @@
     const input = document.getElementById("milrp-input");
     const sendBtn = document.getElementById("milrp-send");
     const messagesEl = document.getElementById("milrp-messages");
-    const overlay = document.getElementById("milrp-overlay");
-    const nameSpan = document.getElementById("milrp-name");
-    const changeUserBtn = document.getElementById("milrp-change-user");
+    const statusEl = document.getElementById("milrp-status");
 
-    // ---- Change Username ----
-    changeUserBtn.onclick = () => {
-        const newName = prompt("Enter new username:", username);
-        if (newName && newName.trim() !== "") {
-            username = newName.trim();
-            nameSpan.textContent = username;
-            localStorage.setItem("milrpChatUser", username);
-        }
-    };
-
-    // ---- Messages ----
     const messages = [];
 
     function renderMessages() {
@@ -100,54 +69,65 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    function openChat() { 
+        chatWin.style.display = "block"; 
+        input.focus(); 
+    }
+    function closeChat() { 
+        chatWin.style.display = "none"; 
+    }
+    chatBtn.onclick = openChat;
+    closeBtn.onclick = closeChat;
+
     function sendMessage() {
         const txt = input.value.trim();
-        if (!txt) return;
-        const msg = `[${username}] ${txt}`;
-        socket.emit("chat message", msg);
-        messages.push(msg);
-        if (messages.length > MAX_MESSAGES) messages.shift();
+        if (!txt || socket.readyState !== WebSocket.OPEN) return;
+        const msg = { user: username, text: txt };
+        socket.send(JSON.stringify(msg));
         input.value = "";
-        renderMessages();
     }
 
     sendBtn.onclick = sendMessage;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") sendMessage(); });
 
-    socket.on("chat message", (msg) => {
-        messages.push(msg);
-        if (messages.length > MAX_MESSAGES) messages.shift();
-        renderMessages();
+    // KEYBIND BLOCKER: disables only known flying controls while typing in the chat input
+    function blockGeoFSKeys(e) {
+        if (chatWin.style.display === "block" && document.activeElement === input) {
+            // GeoFS controls ("flying" keybinds); add/remove as needed
+            const flyingKeys = [
+                "e", "w", "a", "s", "d", "q", "z", "x", "r", "f",
+                "c", "v", "b", "t", "g", "y", "u", "i", "o", "p", "l",
+                "m", "n"
+            ];
+            // Only block if NO modifier (Shift, Ctrl, Alt, Meta) is held;
+            // typing + editing keys and symbols are never blocked
+            if (
+                flyingKeys.includes(e.key.toLowerCase()) &&
+                !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+            ) {
+                e.stopPropagation();
+                e.preventDefault();
+            }
+        }
+    }
+    window.addEventListener("keydown", blockGeoFSKeys, true);
+    window.addEventListener("keyup", blockGeoFSKeys, true);
+
+    // Connect to WebSocket server
+    const socket = new WebSocket(SERVER_URL);
+
+    socket.addEventListener("open", () => { statusEl.textContent = "Connected"; });
+    socket.addEventListener("close", () => { statusEl.textContent = "Disconnected"; });
+    socket.addEventListener("error", () => { statusEl.textContent = "Error"; });
+
+    socket.addEventListener("message", (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.user && msg.text) {
+                messages.push(`[${msg.user}] ${msg.text}`);
+                if (messages.length > 20) messages.shift();
+                renderMessages();
+            }
+        } catch(e){ console.error("Malformed message", event.data); }
     });
-
-    // ---- Chat Open/Close ----
-    function disableGeoFSInput(state) { overlay.style.display = state ? "block" : "none"; }
-    function openChat() { chatWin.style.display = "block"; input.focus(); disableGeoFSInput(true); }
-    function closeChat() { chatWin.style.display = "none"; disableGeoFSInput(false); }
-
-    chatBtn.onclick = openChat;
-    closeBtn.onclick = closeChat;
-    input.addEventListener("focus", () => disableGeoFSInput(true));
-    input.addEventListener("blur", () => disableGeoFSInput(false));
-
-    // ---- Keyboard ----
-    window.addEventListener("keydown", function(e) {
-        if (document.activeElement === input) {
-            e.stopImmediatePropagation();
-            if (e.key === "Enter") sendMessage();
-            return;
-        }
-
-        if (e.key.toLowerCase() === "t" && chatWin.style.display === "none") {
-            openChat();
-            e.preventDefault();
-            e.stopPropagation();
-        }
-
-        if (e.key === "Escape" && chatWin.style.display === "block") {
-            closeChat();
-            e.preventDefault();
-            e.stopPropagation();
-        }
-    }, true);
-
 })();
