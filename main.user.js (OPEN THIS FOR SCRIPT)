@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         GeoFS Military RP Chat (P2P + Change Name)
+// @name         GeoFS Military RP Chat (Typing + Reconnect + Name Change)
 // @namespace    http://tampermonkey.net/
-// @version      3.2
-// @description  Multiplayer RP chat with input-safe key handling, server connection, and username change
+// @version      4.0
+// @description  RP chat with typing indicator, server connection, username change, and reconnect
 // @match        https://www.geo-fs.com/*
 // @grant        none
 // ==/UserScript==
@@ -12,40 +12,22 @@
 
     const SERVER_URL = "wss://mrp-chat-1.onrender.com";
 
-    // Username setup
     let username = localStorage.getItem("milrpChatUser") || prompt("Enter your RP username:") || "Anonymous";
     localStorage.setItem("milrpChatUser", username);
 
     // Style
     const style = document.createElement("style");
     style.textContent = `
-        #milrp-chat-btn {
-            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
-            background: #253356; color: white; padding: 12px 18px; border-radius: 8px;
-            cursor: pointer; border: none; font-weight: bold; box-shadow: 0 0 8px #0006;
-        }
-        #milrp-chat-win {
-            display: none; position: fixed; bottom: 70px; right: 20px; z-index: 10000;
-            width: 320px; background: #253356; color: white; border-radius: 10px;
-            padding: 10px; box-shadow: 0 0 14px #0008;
-        }
-        #milrp-messages {
-            height: 180px; overflow-y: auto; margin-bottom: 8px;
-            background: #152040; padding: 5px; border-radius: 7px;
-            font-size: 13px; line-height: 1.3em;
-        }
-        #milrp-input { width: 65%; }
-        #milrp-send, #milrp-changeuser {
-            width: 16%; margin-left: 2%; background: #4067b6; color: white; border: none; border-radius: 5px; font-size: 12px;
-        }
+        #milrp-chat-btn { position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: #253356; color: white; padding: 12px 18px; border-radius: 8px; cursor: pointer; border: none; font-weight: bold; box-shadow: 0 0 8px #0006; }
+        #milrp-chat-win { display: none; position: fixed; bottom: 70px; right: 20px; z-index: 10000; width: 320px; background: #253356; color: white; border-radius: 10px; padding: 10px; box-shadow: 0 0 14px #0008; }
+        #milrp-messages { height: 160px; overflow-y: auto; margin-bottom: 8px; background: #152040; padding: 5px; border-radius: 7px; font-size: 13px; line-height: 1.3em; }
+        #milrp-input { width: 60%; }
+        #milrp-send, #milrp-changeuser, #milrp-reconnect { width: 12%; margin-left: 2%; background: #4067b6; color: white; border: none; border-radius: 5px; font-size: 12px; }
         #milrp-changeuser { background: #384970; }
         #milrp-username { padding: 2px 0; color: #d0ddff; text-align: left; font-size: 12px; }
         #milrp-status { font-size: 11px; color: #d0ffb0; margin-left: 5px; }
-        #milrp-overlay {
-            position: fixed; bottom: 50%; left: 50%; transform: translate(-50%, 50%);
-            background: rgba(20,20,40,0.85); color: white; padding: 6px 10px;
-            border-radius: 6px; z-index: 20000; font-size: 13px; display: none;
-        }
+        #milrp-typing { font-size: 11px; color: #ffd870; margin-top: 3px; height: 14px; }
+        #milrp-overlay { position: fixed; bottom: 50%; left: 50%; transform: translate(-50%, 50%); background: rgba(20,20,40,0.85); color: white; padding: 6px 10px; border-radius: 6px; z-index: 20000; font-size: 13px; display: none; }
     `;
     document.head.appendChild(style);
 
@@ -58,8 +40,10 @@
                 <b>User:</b> <span id="milrp-name">${username}</span>
                 <button id="milrp-changeuser">Change</button>
                 <span id="milrp-status">Connecting...</span>
+                <button id="milrp-reconnect">Reconnect</button>
             </div>
             <div id="milrp-messages"></div>
+            <div id="milrp-typing"></div>
             <input id="milrp-input" placeholder="Type message..." maxlength="100"/>
             <button id="milrp-send">Send</button>
         </div>
@@ -76,8 +60,11 @@
     const changeUserBtn = document.getElementById("milrp-changeuser");
     const nameEl = document.getElementById("milrp-name");
     const statusEl = document.getElementById("milrp-status");
+    const reconnectBtn = document.getElementById("milrp-reconnect");
+    const typingEl = document.getElementById("milrp-typing");
 
     const messages = [];
+    let typingTimeout;
 
     function renderMessages() {
         messagesEl.innerHTML = messages.map(m => `<div>${m}</div>`).join("");
@@ -92,13 +79,12 @@
     function sendMessage() {
         const txt = input.value.trim();
         if (!txt || socket.readyState !== WebSocket.OPEN) return;
-        const msg = { user: username, text: txt };
+        const msg = { type: "message", user: username, text: txt };
         socket.send(JSON.stringify(msg));
         input.value = "";
     }
     sendBtn.onclick = sendMessage;
 
-    // Change username
     changeUserBtn.onclick = () => {
         const newName = prompt("Enter new username:", username);
         if (newName && newName !== username) {
@@ -108,37 +94,53 @@
         }
     };
 
-    // Input-focused key restriction
     input.addEventListener("focus", () => overlay.style.display = "block");
     input.addEventListener("blur", () => overlay.style.display = "none");
-    input.addEventListener("keydown", (e) => {
-        e.stopImmediatePropagation();
-        if (e.key === "Enter") sendMessage();
+
+    // Typing indicator
+    input.addEventListener("input", () => {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "typing", user: username }));
+        }
     });
 
-    // Global keyboard shortcuts
+    // Global keyboard
     window.addEventListener("keydown", function(e) {
-        if (document.activeElement === input) return; // skip if typing
+        if (document.activeElement === input) return;
         if (e.key === "t" && chatWin.style.display === "none") { openChat(); e.preventDefault(); e.stopPropagation(); }
         if (e.key === "Escape" && chatWin.style.display === "block") { closeChat(); e.preventDefault(); e.stopPropagation(); }
     }, true);
 
-    // WebSocket connection
-    const socket = new WebSocket(SERVER_URL);
+    let socket;
+    function connectSocket() {
+        socket = new WebSocket(SERVER_URL);
+        statusEl.textContent = "Connecting...";
 
-    socket.addEventListener("open", () => { statusEl.textContent = "Connected"; });
-    socket.addEventListener("close", () => { statusEl.textContent = "Disconnected"; });
-    socket.addEventListener("error", () => { statusEl.textContent = "Error"; });
+        socket.addEventListener("open", () => { statusEl.textContent = "Connected"; });
+        socket.addEventListener("close", () => { statusEl.textContent = "Disconnected"; typingEl.textContent = ""; });
+        socket.addEventListener("error", () => { statusEl.textContent = "Error"; });
 
-    socket.addEventListener("message", (event) => {
-        try {
-            const msg = JSON.parse(event.data);
-            if (msg.user && msg.text) {
-                messages.push(`[${msg.user}] ${msg.text}`);
-                if (messages.length > 20) messages.shift();
-                renderMessages();
-            }
-        } catch(e){ console.error("Malformed message", event.data); }
-    });
+        socket.addEventListener("message", (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if(msg.type === "message") {
+                    messages.push(`[${msg.user}] ${msg.text}`);
+                    if (messages.length > 20) messages.shift();
+                    renderMessages();
+                } else if(msg.type === "typing" && msg.user !== username) {
+                    typingEl.textContent = `${msg.user} is typing...`;
+                    clearTimeout(typingTimeout);
+                    typingTimeout = setTimeout(() => { typingEl.textContent = ""; }, 1500);
+                }
+            } catch(e) { console.error("Malformed message", event.data); }
+        });
+    }
+
+    reconnectBtn.onclick = () => {
+        if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+        connectSocket();
+    };
+
+    connectSocket();
 
 })();
