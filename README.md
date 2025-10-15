@@ -1,2 +1,7 @@
 # Mrp-chat
-simple as the title **ITS A CHAT FOR MRPERS SO TEHY DONT SPAM THE CHAT**
+
+A simple chat tool for Mrpers to avoid spamming the main chat.
+
+**Note:** This project was made by a friend. I do not know how to code.
+
+Feel free to use it!
