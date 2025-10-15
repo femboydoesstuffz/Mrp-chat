@@ -7,3 +7,10 @@ A simple chat tool for Mrpers to avoid spamming the main chat.
 Feel free to use it!
 
 # Tampermoney version
+Download tampermonkey
+make new user script
+paste main.js
+open geofs and reload 
+
+# Console version 
+_                              _
